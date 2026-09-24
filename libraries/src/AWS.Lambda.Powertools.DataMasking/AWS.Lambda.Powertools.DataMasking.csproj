@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!--  Remaining properties are defined in Directory.Build.props  -->
+        <PackageId>AWS.Lambda.Powertools.DataMasking</PackageId>
+        <Description>Powertools for AWS Lambda (.NET) - Data Masking package.</Description>
+        <AssemblyName>AWS.Lambda.Powertools.DataMasking</AssemblyName>
+        <RootNamespace>AWS.Lambda.Powertools.DataMasking</RootNamespace>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+</Project>

@@ -59,9 +59,27 @@ internal static class JsonNodeMasker
 
     private static void MaskPath(JsonNode root, string path, MaskingOptions options)
     {
-        // Walk the dotted path segment-by-segment without allocating the intermediate string[]
-        // that string.Split would produce. JsonObject lookups require a string key, so each
-        // segment is still materialized, but the array (and its bounds/GC overhead) is avoided.
+        if (TryResolveLeaf(root, path, out var parent, out var leaf))
+        {
+            parent[leaf] = MaskValue(parent[leaf], options);
+        }
+    }
+
+    /// <summary>
+    /// Walks the dotted <paramref name="path"/> and, if it resolves to a property on an object,
+    /// returns that object and the leaf key. Returns <see langword="false"/> when any intermediate
+    /// segment is missing or is not an object, or when the leaf property does not exist.
+    /// </summary>
+    /// <remarks>
+    /// The walk avoids the intermediate <c>string[]</c> that <c>string.Split</c> would allocate.
+    /// JsonObject lookups require a string key, so each segment is still materialized, but the array
+    /// (and its bounds/GC overhead) is avoided.
+    /// </remarks>
+    private static bool TryResolveLeaf(JsonNode root, string path, out JsonObject parent, out string leaf)
+    {
+        parent = null!;
+        leaf = string.Empty;
+
         var current = root;
         var start = 0;
 
@@ -69,27 +87,33 @@ internal static class JsonNodeMasker
         while ((separator = path.IndexOf(PathSeparator, start)) >= 0)
         {
             var segment = path.Substring(start, separator - start);
-
-            // If any intermediate segment is missing or is not an object, the path does not
-            // exist in this payload and is skipped.
             if (current is not JsonObject obj || !obj.TryGetPropertyValue(segment, out var next) || next is null)
             {
-                return;
+                return false;
             }
 
             current = next;
             start = separator + 1;
         }
 
-        if (current is JsonObject parent)
+        if (current is not JsonObject leafParent)
         {
-            var leaf = start == 0 ? path : path.Substring(start);
-            if (parent.ContainsKey(leaf))
-            {
-                parent[leaf] = MaskValue(parent[leaf], options);
-            }
+            return false;
         }
+
+        var key = start == 0 ? path : path.Substring(start);
+        if (!leafParent.ContainsKey(key))
+        {
+            return false;
+        }
+
+        parent = leafParent;
+        leaf = key;
+        return true;
     }
+
+    private static string ReadRawValue(JsonNode value) =>
+        value is JsonValue jsonValue ? jsonValue.ToString() : value.ToJsonString();
 
     private static JsonNode? MaskValue(JsonNode? value, MaskingOptions options)
     {
@@ -106,8 +130,7 @@ internal static class JsonNodeMasker
             return JsonValue.Create(options.Apply(string.Empty));
         }
 
-        var raw = value is JsonValue jsonValue ? jsonValue.ToString() : value.ToJsonString();
-        return JsonValue.Create(options.Apply(raw));
+        return JsonValue.Create(options.Apply(ReadRawValue(value)));
     }
 
     /// <summary>
@@ -137,32 +160,10 @@ internal static class JsonNodeMasker
 
     private static async Task TransformPathAsync(JsonNode root, string path, Func<string, Task<string>> transform)
     {
-        var current = root;
-        var start = 0;
-
-        int separator;
-        while ((separator = path.IndexOf(PathSeparator, start)) >= 0)
+        if (TryResolveLeaf(root, path, out var parent, out var leaf) && parent[leaf] is not null)
         {
-            var segment = path.Substring(start, separator - start);
-            if (current is not JsonObject obj || !obj.TryGetPropertyValue(segment, out var next) || next is null)
-            {
-                return;
-            }
-
-            current = next;
-            start = separator + 1;
-        }
-
-        if (current is JsonObject parent)
-        {
-            var leaf = start == 0 ? path : path.Substring(start);
-            if (parent.ContainsKey(leaf) && parent[leaf] is not null)
-            {
-                var value = parent[leaf]!;
-                var raw = value is JsonValue jsonValue ? jsonValue.ToString() : value.ToJsonString();
-                var transformed = await transform(raw);
-                parent[leaf] = JsonValue.Create(transformed);
-            }
+            var transformed = await transform(ReadRawValue(parent[leaf]!));
+            parent[leaf] = JsonValue.Create(transformed);
         }
     }
 }

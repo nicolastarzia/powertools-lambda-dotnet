@@ -58,6 +58,27 @@ public sealed class DataMasking
     }
 
     /// <summary>
+    /// Irreversibly masks the supplied fields within a JSON string and returns the result as a
+    /// <see cref="JsonNode"/>, ready to be passed to structured logging (for example
+    /// <c>Logger.LogInformation(masker.EraseToNode(json, fields))</c>) without an extra string round-trip.
+    /// This overload is fully trimming/AOT safe.
+    /// </summary>
+    /// <param name="json">The JSON payload as a string.</param>
+    /// <param name="fields">The dotted field paths to mask.</param>
+    /// <param name="options">Optional masking options. Defaults to a fixed <c>*****</c> mask.</param>
+    /// <returns>The masked payload as a <see cref="JsonNode"/> (or <see langword="null"/> if the payload was JSON null).</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="json"/> or <paramref name="fields"/> is <see langword="null"/>.</exception>
+    public JsonNode? EraseToNode(string json, string[] fields, MaskingOptions? options = null)
+    {
+        if (json is null) throw new ArgumentNullException(nameof(json));
+        if (fields is null) throw new ArgumentNullException(nameof(fields));
+
+        var root = JsonNode.Parse(json);
+        JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
+        return root;
+    }
+
+    /// <summary>
     /// Irreversibly masks the supplied fields within a JSON string.
     /// This overload is fully trimming/AOT safe.
     /// </summary>

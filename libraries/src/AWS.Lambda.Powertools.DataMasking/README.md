@@ -85,11 +85,35 @@ var decrypted = await masker.DecryptAsync(encrypted,
 You can also encrypt/decrypt the whole payload by omitting `fields`. The `encryptionContext` is bound
 to the ciphertext at encrypt time and validated on decrypt, so a mismatched context fails.
 
+## Logging integration
+
+To redact sensitive fields before they reach your logs, mask the payload and log the result.
+`EraseToNode` returns a `JsonNode` that Powertools Logging serializes directly, avoiding an extra
+string round-trip:
+
+```csharp
+using AWS.Lambda.Powertools.DataMasking;
+using AWS.Lambda.Powertools.Logging;
+
+var masker = new DataMasking();
+
+Logger.LogInformation(masker.EraseToNode(json, new[] { "customer.ssn", "payment.creditCard" }));
+```
+
+Data Masking and Logging stay independent packages: the integration is just this pattern, so you can
+mask before logging without coupling the two utilities.
+
 ### AOT / trimming
 
-The `Erase(string, ...)` and `Erase(JsonNode, ...)` overloads are fully trimming/AOT safe. The
-`Erase(object, ...)` overload uses reflection-based serialization and is annotated accordingly; for
-AOT scenarios use the overload that accepts a source-generated `JsonTypeInfo`.
+The `Erase(string, ...)`, `Erase(JsonNode, ...)`, and `EraseToNode(...)` overloads are fully
+trimming/AOT safe. The `Erase(object, ...)` overload uses reflection-based serialization and is
+annotated accordingly; for AOT scenarios use the overload that accepts a source-generated
+`JsonTypeInfo`.
+
+The `AwsEncryptionSdkProvider` relies on the AWS Encryption SDK for .NET (Dafny-based runtime), which
+uses reflection and is therefore **not** compatible with trimming/Native AOT. It is annotated with
+`[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`. If you need AOT, supply a custom
+`IDataMaskingProvider` implementation that is AOT-compatible.
 
 The `AwsEncryptionSdkProvider` relies on the AWS Encryption SDK for .NET (Dafny-based runtime), which
 uses reflection and is therefore **not** compatible with trimming/Native AOT. It is annotated with

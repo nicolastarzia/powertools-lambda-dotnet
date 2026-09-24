@@ -4,8 +4,8 @@ This example shows how to use the [Data Masking](https://github.com/aws-powertoo
 utility to irreversibly **erase** sensitive fields (PII) from a payload before it is logged or returned,
 while keeping the non-sensitive fields readable.
 
-> This example covers **Phase 1 (`Erase`)** of the utility. Field-level and full-payload
-> encryption/decryption via a pluggable provider (AWS Encryption SDK + KMS) are planned for later phases.
+This example focuses on the `Erase` operation and its integration with Powertools Logging. For
+reversible `Encrypt`/`Decrypt` with AWS KMS, see the utility README.
 
 ## How it works
 
@@ -19,6 +19,10 @@ and applies three masking styles:
 The result keeps `orderId`, `item`, `payment.amount`, and `address.city` readable, so the payload
 remains useful for debugging and monitoring. `LogEvent` is intentionally disabled so the raw PII is
 never auto-logged.
+
+**Logging integration:** the handler logs the masked payload with
+`Logger.LogInformation(_dataMasking.EraseToNode(...))`. `EraseToNode` returns a `JsonNode`, so the
+masked object is logged as structured JSON with no extra string round-trip.
 
 ## Prerequisites
 

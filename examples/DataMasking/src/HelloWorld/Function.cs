@@ -61,8 +61,17 @@ public class Function
             PreserveLength = true
         });
 
-        // Safe to log now: sensitive fields are erased, structure is intact
-        Logger.LogInformation("Processing masked order: {Order}", masked);
+        // Logging integration: EraseToNode returns a JsonNode ready for structured logging, so the
+        // masked payload is logged as a JSON object (not a string) with no extra serialization round-trip.
+        // Sensitive fields are already erased, so this is safe to log.
+        Logger.LogInformation(_dataMasking.EraseToNode(body, new[]
+        {
+            "customer.ssn",
+            "customer.email",
+            "customer.phone",
+            "payment.creditCard",
+            "address.street"
+        }));
 
         return new APIGatewayProxyResponse
         {

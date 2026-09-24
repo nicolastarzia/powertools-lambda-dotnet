@@ -13,6 +13,7 @@
  * permissions and limitations under the License.
  */
 
+using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Amazon.Lambda.APIGatewayEvents;
@@ -52,7 +53,7 @@ public class Function
         // 2. Custom rules: keep the first char of the email, and preserve the phone length
         masked = _dataMasking.Erase(masked, new[] { "customer.email" }, new MaskingOptions
         {
-            Pattern = new Regex("^(.).*@"),
+            Pattern = new Regex("^(.).*@", RegexOptions.None, TimeSpan.FromSeconds(1)),
             Replacement = "$1****@"
         });
 

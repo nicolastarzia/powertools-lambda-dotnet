@@ -73,9 +73,7 @@ public sealed class DataMasking
         if (json is null) throw new ArgumentNullException(nameof(json));
         if (fields is null) throw new ArgumentNullException(nameof(fields));
 
-        var root = JsonNode.Parse(json);
-        JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
-        return root;
+        return MaskRoot(JsonNode.Parse(json), fields, options);
     }
 
     /// <summary>
@@ -92,9 +90,7 @@ public sealed class DataMasking
         if (json is null) throw new ArgumentNullException(nameof(json));
         if (fields is null) throw new ArgumentNullException(nameof(fields));
 
-        var root = JsonNode.Parse(json);
-        JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
-        return root?.ToJsonString() ?? "null";
+        return Serialize(MaskRoot(JsonNode.Parse(json), fields, options));
     }
 
     /// <summary>
@@ -137,9 +133,7 @@ public sealed class DataMasking
         if (data is null) throw new ArgumentNullException(nameof(data));
         if (fields is null) throw new ArgumentNullException(nameof(fields));
 
-        var root = JsonSerializer.SerializeToNode(data);
-        JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
-        return root?.ToJsonString() ?? "null";
+        return Serialize(MaskRoot(JsonSerializer.SerializeToNode(data), fields, options));
     }
 
     /// <summary>
@@ -159,9 +153,7 @@ public sealed class DataMasking
         if (jsonTypeInfo is null) throw new ArgumentNullException(nameof(jsonTypeInfo));
         if (fields is null) throw new ArgumentNullException(nameof(fields));
 
-        var root = JsonSerializer.SerializeToNode(data, jsonTypeInfo);
-        JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
-        return root?.ToJsonString() ?? "null";
+        return Serialize(MaskRoot(JsonSerializer.SerializeToNode(data, jsonTypeInfo), fields, options));
     }
 
     /// <summary>
@@ -202,10 +194,8 @@ public sealed class DataMasking
         if (fields is null) throw new ArgumentNullException(nameof(fields));
 
         var provider = RequireProvider();
-        var root = JsonNode.Parse(json);
-        await JsonNodeMasker.TransformFieldsAsync(root, fields,
+        return await TransformFieldsToStringAsync(json, fields,
             value => provider.EncryptAsync(value, encryptionContext, cancellationToken));
-        return root?.ToJsonString() ?? "null";
     }
 
     /// <summary>
@@ -247,15 +237,29 @@ public sealed class DataMasking
         if (fields is null) throw new ArgumentNullException(nameof(fields));
 
         var provider = RequireProvider();
-        var root = JsonNode.Parse(json);
-        await JsonNodeMasker.TransformFieldsAsync(root, fields,
+        return await TransformFieldsToStringAsync(json, fields,
             value => provider.DecryptAsync(value, encryptionContext, cancellationToken));
-        return root?.ToJsonString() ?? "null";
     }
 
     private IDataMaskingProvider RequireProvider()
     {
         return _provider ?? throw new InvalidOperationException(
             "This operation requires an encryption provider. Construct DataMasking with an IDataMaskingProvider (for example new DataMasking(new AwsEncryptionSdkProvider(keyArn))).");
+    }
+
+    private static JsonNode? MaskRoot(JsonNode? root, string[] fields, MaskingOptions? options)
+    {
+        JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
+        return root;
+    }
+
+    private static string Serialize(JsonNode? root) => root?.ToJsonString() ?? "null";
+
+    private static async Task<string> TransformFieldsToStringAsync(
+        string json, string[] fields, Func<string, Task<string>> transform)
+    {
+        var root = JsonNode.Parse(json);
+        await JsonNodeMasker.TransformFieldsAsync(root, fields, transform);
+        return Serialize(root);
     }
 }

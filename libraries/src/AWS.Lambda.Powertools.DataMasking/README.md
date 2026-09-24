@@ -4,16 +4,19 @@ The Data Masking utility protects sensitive data (PII, credentials, financial re
 logged, stored, or forwarded to another service, helping to meet requirements such as GDPR, HIPAA,
 and PCI-DSS.
 
-> **Status:** this package currently ships **Phase 1 – `Erase`** (irreversible masking). Field-level
-> and full-payload encryption/decryption through a pluggable provider (AWS Encryption SDK + KMS) are
-> planned for later phases. See [issue #1257](https://github.com/aws-powertools/powertools-lambda-dotnet/issues/1257).
+> **Status:** this package ships **`Erase`** (irreversible masking) and **`Encrypt`/`Decrypt`**
+> (reversible, via a pluggable provider using the AWS Encryption SDK + KMS). Logging integration and
+> docs parity with other runtimes are planned next.
+> See [issue #1257](https://github.com/aws-powertools/powertools-lambda-dotnet/issues/1257).
 
 ## Key features
 
 - Irreversibly **erase** sensitive fields while keeping the surrounding payload structure intact
+- **Encrypt/decrypt** whole payloads or specific fields with AWS KMS envelope encryption
+- Pluggable encryption provider (`IDataMaskingProvider`); default is `AwsEncryptionSdkProvider`
 - Select fields with simple dotted paths (for example `address.street`)
 - Customizable masking: fixed string, length-preserving mask, or regex + replacement
-- Trimming/Native AOT friendly when operating over JSON strings or `JsonNode`
+- `Erase` over JSON strings or `JsonNode` is trimming/Native AOT friendly
 
 ## Erase
 
@@ -56,8 +59,39 @@ masker.Erase(json, new[] { "email" }, new MaskingOptions
 });
 ```
 
+## Encrypt / Decrypt
+
+Unlike `Erase`, encryption is **reversible**. Construct `DataMasking` with an `IDataMaskingProvider`.
+The default provider, `AwsEncryptionSdkProvider`, performs AWS KMS envelope encryption.
+
+```csharp
+using AWS.Lambda.Powertools.DataMasking;
+using AWS.Lambda.Powertools.DataMasking.Providers;
+
+var provider = new AwsEncryptionSdkProvider(KMS_KEY_ARN);
+var masker = new DataMasking(provider);
+
+// Encrypt only specific fields; the rest of the payload stays readable
+var encrypted = await masker.EncryptAsync(json,
+    fields: new[] { "customer.ssn", "payment.creditCard" },
+    encryptionContext: new Dictionary<string, string> { ["tenantId"] = "acme-corp" });
+
+// Decrypt restores the original values (encryption context is validated)
+var decrypted = await masker.DecryptAsync(encrypted,
+    fields: new[] { "customer.ssn", "payment.creditCard" },
+    encryptionContext: new Dictionary<string, string> { ["tenantId"] = "acme-corp" });
+```
+
+You can also encrypt/decrypt the whole payload by omitting `fields`. The `encryptionContext` is bound
+to the ciphertext at encrypt time and validated on decrypt, so a mismatched context fails.
+
 ### AOT / trimming
 
 The `Erase(string, ...)` and `Erase(JsonNode, ...)` overloads are fully trimming/AOT safe. The
 `Erase(object, ...)` overload uses reflection-based serialization and is annotated accordingly; for
 AOT scenarios use the overload that accepts a source-generated `JsonTypeInfo`.
+
+The `AwsEncryptionSdkProvider` relies on the AWS Encryption SDK for .NET (Dafny-based runtime), which
+uses reflection and is therefore **not** compatible with trimming/Native AOT. It is annotated with
+`[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`. If you need AOT, supply a custom
+`IDataMaskingProvider` implementation that is AOT-compatible.

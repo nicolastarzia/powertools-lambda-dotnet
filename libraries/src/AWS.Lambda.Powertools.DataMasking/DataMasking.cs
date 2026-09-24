@@ -14,24 +14,49 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
+using System.Threading;
+using System.Threading.Tasks;
 using AWS.Lambda.Powertools.DataMasking.Internal;
+using AWS.Lambda.Powertools.DataMasking.Providers;
 
 namespace AWS.Lambda.Powertools.DataMasking;
 
 /// <summary>
-/// Provides irreversible masking (erasing) of sensitive fields within a payload.
+/// Provides masking of sensitive fields within a payload: irreversible <c>Erase</c>, and reversible
+/// <c>Encrypt</c>/<c>Decrypt</c> when constructed with an <see cref="IDataMaskingProvider"/>.
 /// </summary>
 /// <remarks>
-/// This is Phase 1 of the Data Masking utility and covers <c>Erase</c> only. Field-level and
-/// full-payload encryption/decryption via a pluggable provider are planned for later phases.
-/// Field selection uses simple dotted paths (for example <c>"address.street"</c>).
+/// Field selection uses simple dotted paths (for example <c>"address.street"</c>). Full JMESPath
+/// expression support is planned for a later phase.
 /// </remarks>
 public sealed class DataMasking
 {
+    private readonly IDataMaskingProvider? _provider;
+
+    /// <summary>
+    /// Creates an instance that supports the <c>Erase</c> operations only.
+    /// Use <see cref="DataMasking(IDataMaskingProvider)"/> to enable <c>Encrypt</c>/<c>Decrypt</c>.
+    /// </summary>
+    public DataMasking()
+    {
+    }
+
+    /// <summary>
+    /// Creates an instance backed by an encryption provider, enabling <c>Encrypt</c>/<c>Decrypt</c>
+    /// in addition to <c>Erase</c>.
+    /// </summary>
+    /// <param name="provider">The encryption backend (for example <c>AwsEncryptionSdkProvider</c>).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="provider"/> is <see langword="null"/>.</exception>
+    public DataMasking(IDataMaskingProvider provider)
+    {
+        _provider = provider ?? throw new ArgumentNullException(nameof(provider));
+    }
+
     /// <summary>
     /// Irreversibly masks the supplied fields within a JSON string.
     /// This overload is fully trimming/AOT safe.
@@ -116,5 +141,100 @@ public sealed class DataMasking
         var root = JsonSerializer.SerializeToNode(data, jsonTypeInfo);
         JsonNodeMasker.MaskFields(root, fields, options ?? MaskingOptions.Default);
         return root?.ToJsonString() ?? "null";
+    }
+
+    /// <summary>
+    /// Encrypts the entire JSON payload using the configured <see cref="IDataMaskingProvider"/>.
+    /// </summary>
+    /// <param name="json">The JSON payload as a string.</param>
+    /// <param name="encryptionContext">Optional encryption context bound to the ciphertext.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>The encrypted payload.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="json"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">No provider was configured.</exception>
+    public Task<string> EncryptAsync(
+        string json,
+        IDictionary<string, string>? encryptionContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (json is null) throw new ArgumentNullException(nameof(json));
+        return RequireProvider().EncryptAsync(json, encryptionContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Encrypts only the supplied fields within a JSON payload, leaving the rest readable.
+    /// </summary>
+    /// <param name="json">The JSON payload as a string.</param>
+    /// <param name="fields">The dotted field paths to encrypt.</param>
+    /// <param name="encryptionContext">Optional encryption context bound to each field's ciphertext.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>The payload with the selected fields encrypted, serialized to a JSON string.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="json"/> or <paramref name="fields"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">No provider was configured.</exception>
+    public async Task<string> EncryptAsync(
+        string json,
+        string[] fields,
+        IDictionary<string, string>? encryptionContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (json is null) throw new ArgumentNullException(nameof(json));
+        if (fields is null) throw new ArgumentNullException(nameof(fields));
+
+        var provider = RequireProvider();
+        var root = JsonNode.Parse(json);
+        await JsonNodeMasker.TransformFieldsAsync(root, fields,
+            value => provider.EncryptAsync(value, encryptionContext, cancellationToken));
+        return root?.ToJsonString() ?? "null";
+    }
+
+    /// <summary>
+    /// Decrypts an entire payload previously produced by <see cref="EncryptAsync(string,IDictionary{string,string},CancellationToken)"/>.
+    /// </summary>
+    /// <param name="value">The encrypted payload.</param>
+    /// <param name="encryptionContext">Optional encryption context to validate against the value bound at encrypt time.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>The decrypted payload.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">No provider was configured.</exception>
+    public Task<string> DecryptAsync(
+        string value,
+        IDictionary<string, string>? encryptionContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (value is null) throw new ArgumentNullException(nameof(value));
+        return RequireProvider().DecryptAsync(value, encryptionContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Decrypts only the supplied fields within a JSON payload previously produced by
+    /// <see cref="EncryptAsync(string,string[],IDictionary{string,string},CancellationToken)"/>.
+    /// </summary>
+    /// <param name="json">The JSON payload as a string.</param>
+    /// <param name="fields">The dotted field paths to decrypt.</param>
+    /// <param name="encryptionContext">Optional encryption context to validate.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>The payload with the selected fields decrypted, serialized to a JSON string.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="json"/> or <paramref name="fields"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">No provider was configured.</exception>
+    public async Task<string> DecryptAsync(
+        string json,
+        string[] fields,
+        IDictionary<string, string>? encryptionContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (json is null) throw new ArgumentNullException(nameof(json));
+        if (fields is null) throw new ArgumentNullException(nameof(fields));
+
+        var provider = RequireProvider();
+        var root = JsonNode.Parse(json);
+        await JsonNodeMasker.TransformFieldsAsync(root, fields,
+            value => provider.DecryptAsync(value, encryptionContext, cancellationToken));
+        return root?.ToJsonString() ?? "null";
+    }
+
+    private IDataMaskingProvider RequireProvider()
+    {
+        return _provider ?? throw new InvalidOperationException(
+            "This operation requires an encryption provider. Construct DataMasking with an IDataMaskingProvider (for example new DataMasking(new AwsEncryptionSdkProvider(keyArn))).");
     }
 }

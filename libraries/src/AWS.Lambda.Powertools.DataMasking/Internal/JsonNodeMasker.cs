@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 
 namespace AWS.Lambda.Powertools.DataMasking.Internal;
 
@@ -107,5 +108,61 @@ internal static class JsonNodeMasker
 
         var raw = value is JsonValue jsonValue ? jsonValue.ToString() : value.ToJsonString();
         return JsonValue.Create(options.Apply(raw));
+    }
+
+    /// <summary>
+    /// Applies an asynchronous string transform (for example encrypt or decrypt) to each supplied
+    /// field path within <paramref name="root"/>, in place. Missing paths are skipped.
+    /// </summary>
+    internal static async Task TransformFieldsAsync(
+        JsonNode? root,
+        IEnumerable<string> fields,
+        Func<string, Task<string>> transform)
+    {
+        if (root is null)
+        {
+            return;
+        }
+
+        foreach (var field in fields)
+        {
+            if (string.IsNullOrWhiteSpace(field))
+            {
+                continue;
+            }
+
+            await TransformPathAsync(root, field, transform);
+        }
+    }
+
+    private static async Task TransformPathAsync(JsonNode root, string path, Func<string, Task<string>> transform)
+    {
+        var current = root;
+        var start = 0;
+
+        int separator;
+        while ((separator = path.IndexOf(PathSeparator, start)) >= 0)
+        {
+            var segment = path.Substring(start, separator - start);
+            if (current is not JsonObject obj || !obj.TryGetPropertyValue(segment, out var next) || next is null)
+            {
+                return;
+            }
+
+            current = next;
+            start = separator + 1;
+        }
+
+        if (current is JsonObject parent)
+        {
+            var leaf = start == 0 ? path : path.Substring(start);
+            if (parent.ContainsKey(leaf) && parent[leaf] is not null)
+            {
+                var value = parent[leaf]!;
+                var raw = value is JsonValue jsonValue ? jsonValue.ToString() : value.ToJsonString();
+                var transformed = await transform(raw);
+                parent[leaf] = JsonValue.Create(transformed);
+            }
+        }
     }
 }
